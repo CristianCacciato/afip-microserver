@@ -63,12 +63,23 @@ def create_cms(cert_file, key_file):
     return cms_b64
 
 
+import datetime # Asegúrate que esta importación esté al inicio
+# ...
 def get_token_sign(cert_file, key_file):
+    # Usar UTC/utcnow() para evitar problemas de zona horaria y añadir 'Z'
+    now = datetime.datetime.utcnow()
+    
+    # Generation Time: Ahora
+    generation_time = now.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+
+    # Expiration Time: 10 minutos en el futuro
+    expiration_time = (now + datetime.timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+
     tra = f"""<loginTicketRequest version="1.0">
   <header>
-    <uniqueId>{int(datetime.datetime.now().timestamp())}</uniqueId>
-    <generationTime>{(datetime.datetime.now() - datetime.timedelta(minutes=10)).isoformat()}</generationTime>
-    <expirationTime>{(datetime.datetime.now() + datetime.timedelta(minutes=10)).isoformat()}</expirationTime>
+    <uniqueId>{int(now.timestamp())}</uniqueId>
+    <generationTime>{generation_time}</generationTime>
+    <expirationTime>{expiration_time}</expirationTime>
   </header>
   <service>wsfe</service>
 </loginTicketRequest>"""
