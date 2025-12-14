@@ -19,10 +19,16 @@ KEY_1  = "cuit_27239676931.key"
 CERT_2 = "facturacion27461124149.crt"
 KEY_2  = "cuit_27461124149.key"
 
-# AFIP – HOMOLOGACIÓN
+# ----------------------------------------------------------------------
+# AFIP ENDPOINTS
+# ----------------------------------------------------------------------
+
 WSAA = "https://wsaa.afip.gov.ar/ws/services/LoginCms"
+
+# HOMOLOGACIÓN
 WSFE = "https://wswhomo.afip.gov.ar/wsfev1/service.asmx?WSDL"
-# 🔴 PRODUCCIÓN (cuando todo funcione)
+
+# PRODUCCIÓN (activar cuando esté todo OK)
 # WSFE = "https://servicios1.afip.gov.ar/wsfev1/service.asmx?WSDL"
 
 # ----------------------------------------------------------------------
@@ -64,6 +70,7 @@ def get_token_sign(cert_file, key_file):
 
     client = Client(WSAA)
     ta = client.service.loginCms(cms)
+
     return ta.credentials.token, ta.credentials.sign
 
 
@@ -95,7 +102,7 @@ def crear_factura(data):
     # 1) Token AFIP
     token, sign = get_token_sign(cert_file, key_file)
 
-    # 2) WSFE
+    # 2) Cliente WSFE
     client = get_wsfe_client(token, sign, cuit_emisor)
 
     # 3) Último comprobante
@@ -104,9 +111,9 @@ def crear_factura(data):
     )
     cbte_nro = ultimo.CbteNro + 1
 
-    # 4) Comprobante
-    factura = {
-        "FeCabecera": {
+    # 4) Comprobante (ESTRUCTURA CORRECTA AFIP)
+    fe_cae_req = {
+        "FeCabReq": {
             "CantReg": 1,
             "PtoVta": punto_venta,
             "CbteTipo": tipo_cbte,
@@ -127,7 +134,9 @@ def crear_factura(data):
     }
 
     # 5) Solicitar CAE
-    res = client.service.FECAESolicitar(factura)
+    res = client.service.FECAESolicitar(
+        {"FeCAEReq": fe_cae_req}
+    )
 
     det = res.FeDetResp[0]
 
