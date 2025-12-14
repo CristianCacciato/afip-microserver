@@ -31,7 +31,7 @@ KEY_2  = "cuit_27461124149.key"
 # ----------------------------------------------------------------------
 
 WSAA = "https://wsaa.afip.gov.ar/ws/services/LoginCms?wsdl"
-
+    
 # HOMOLOGACIÓN (Entorno de pruebas)
 WSFE = "https://wswhomo.afip.gov.ar/wsfev1/service.asmx?WSDL"
 
@@ -75,9 +75,8 @@ def create_cms(cert_file, key_file):
 
 
 def get_token_sign(cert_file, key_file):
-    # Corregido el manejo de la hora para usar UTC y formato AFIP (YYYY-MM-DDThh:mm:ss.000Z)
+    # (El código de generación de TRA sigue igual)
     now = datetime.datetime.utcnow()
-    
     generation_time = now.strftime('%Y-%m-%dT%H:%M:%S.000Z')
     expiration_time = (now + datetime.timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
@@ -107,11 +106,13 @@ def get_token_sign(cert_file, key_file):
     except WebFault as e:
         # Captura errores de la AFIP (e.g., "Computador no autorizado")
         error_msg = e.fault.faultstring
-        raise Exception(f"Error WSAA (AFIP): {error_msg}. Revise la relación del certificado con el servicio en el portal de AFIP.")
+        raise Exception(f"Error WSAA (AFIP): {error_msg}. Revisar configuración de relación de certificado.")
+    
     except Exception as e:
-        # Captura otros errores (conexión, etc.)
-        raise Exception(f"Error al obtener Token: {str(e)}")
-
+        # Captura cualquier otro error, incluido el error de suds.
+        # Aquí intentamos obtener un mensaje más detallado.
+        return ta # <-- Si se lanza un error antes, `ta` podría ser la respuesta de texto.
+        raise Exception(f"Error desconocido en WSAA. Detalle: {str(e)}. Intente volver a desplegar.")
 
 def get_wsfe_client(token, sign, cuit_emisor):
     client = Client(WSFE)
