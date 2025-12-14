@@ -48,7 +48,7 @@ def create_cms(cert_file, key_file):
     cmd = (
         f"openssl cms -sign -in tra.xml "
         f"-signer {cert_file} -inkey {key_file} "
-        f"-nodetach -outform der"
+        f"-nodetach -outform der | base64"
     )
     return os.popen(cmd).read()
 
