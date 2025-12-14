@@ -76,43 +76,26 @@ def create_cms(cert_file, key_file):
 
 def get_token_sign(cert_file, key_file):
     # (El código de generación de TRA sigue igual)
-    now = datetime.datetime.utcnow()
-    generation_time = now.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-    expiration_time = (now + datetime.timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-
-    tra = f"""<loginTicketRequest version="1.0">
-  <header>
-    <uniqueId>{int(now.timestamp())}</uniqueId>
-    <generationTime>{generation_time}</generationTime>
-    <expirationTime>{expiration_time}</expirationTime>
-  </header>
-  <service>wsfe</service>
-</loginTicketRequest>"""
-
-    with open("tra.xml", "w") as f:
-        f.write(tra)
-
+    # ... (código para generar tra y cms) ...
+    
     cms = create_cms(cert_file, key_file)
-
     client = Client(WSAA)
     
     try:
-        # Llamada al servicio WSAA (Autenticación)
         ta = client.service.loginCms(cms)
         
-        # Si la llamada es exitosa
+        # Aquí confirmamos que si es exitoso, devolvemos la tupla de 2 elementos
         return ta.credentials.token, ta.credentials.sign
 
     except WebFault as e:
-        # Captura errores de la AFIP (e.g., "Computador no autorizado")
+        # Si hay un error SOAP de AFIP, lanzamos la excepción
         error_msg = e.fault.faultstring
         raise Exception(f"Error WSAA (AFIP): {error_msg}. Revisar configuración de relación de certificado.")
-    
     except Exception as e:
-        # Captura cualquier otro error, incluido el error de suds.
-        # Aquí intentamos obtener un mensaje más detallado.
-        return ta # <-- Si se lanza un error antes, `ta` podría ser la respuesta de texto.
-        raise Exception(f"Error desconocido en WSAA. Detalle: {str(e)}. Intente volver a desplegar.")
+        # Si hay cualquier otro error (conexión, suds defectuoso, etc.), lanzamos la excepción
+        raise Exception(f"Error al obtener Token: {str(e)}. Intente re-deployar.")
+
+
 
 def get_wsfe_client(token, sign, cuit_emisor):
     client = Client(WSFE)
