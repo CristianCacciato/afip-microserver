@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 from suds.client import Client
 import datetime
 import os
+import base64
+
 
 app = Flask(__name__)
 
@@ -43,14 +45,22 @@ def load_cert(cuit_emisor):
     else:
         raise Exception("CUIT emisor sin certificado configurado")
 
-
 def create_cms(cert_file, key_file):
     cmd = (
         f"openssl cms -sign -in tra.xml "
         f"-signer {cert_file} -inkey {key_file} "
-        f"-nodetach -outform der | base64"
+        f"-nodetach -outform der > cms.der"
     )
-    return os.popen(cmd).read()
+    os.system(cmd)
+
+    # leer binario
+    with open("cms.der", "rb") as f:
+        cms_bin = f.read()
+
+    # base64 SIN saltos de línea
+    cms_b64 = base64.b64encode(cms_bin).decode("ascii")
+
+    return cms_b64
 
 
 def get_token_sign(cert_file, key_file):
