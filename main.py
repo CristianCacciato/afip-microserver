@@ -2,17 +2,16 @@ from flask import Flask, request, jsonify
 from suds.client import Client
 from suds import WebFault
 import datetime
-import os # Necesario para manejar rutas de archivos
+import os
 import base64
-import subprocess # Necesario para ejecutar openssl de forma segura
+import subprocess
+import xml.etree.ElementTree as ET
 
 
 app = Flask(__name__)
 
 # ----------------------------------------------------------------------
 # CONFIGURACIÓN CUITS Y CERTIFICADOS
-# !! ATENCIÓN: Asegúrate de que estos nombres coincidan EXACTAMENTE
-# !! con los archivos subidos a tu entorno de Render.
 # ----------------------------------------------------------------------
 
 CUIT_1 = "27239676931"
@@ -49,7 +48,6 @@ def load_cert(cuit_emisor):
         raise Exception("CUIT emisor sin certificado configurado")
 
 def create_cms(tra_path, cert_file, key_file):
-    # Utilizamos subprocess y la ruta COMPLETA del archivo TRA
     cmd_list = [
         "openssl", "cms", "-sign", "-in", tra_path,
         "-signer", cert_file, "-inkey", key_file,
@@ -57,23 +55,18 @@ def create_cms(tra_path, cert_file, key_file):
     ]
     
     try:
-        # Ejecuta el comando y captura la salida binaria
         result = subprocess.run(cmd_list, capture_output=True, check=True)
         cms_bin = result.stdout
         
     except subprocess.CalledProcessError as e:
-        # Si openssl falla (ej: no encuentra archivos, clave incorrecta)
         error_message = e.stderr.decode('utf-8', errors='ignore')
         raise Exception(f"Error OpenSSL al firmar: {error_message}. Revise nombres/permisos de los archivos de certificado y clave.")
 
-    # Base64 SIN saltos de línea del binario capturado
     cms_b64 = base64.b64encode(cms_bin).decode("ascii")
-
     return cms_b64
 
 
 def get_token_sign(cert_file, key_file):
-    # Corregido el manejo de la hora para usar UTC y formato AFIP (YYYY-MM-DDThh:mm:ss.000Z)
     now = datetime.datetime.utcnow()
     
     generation_time = now.strftime('%Y-%m-%dT%H:%M:%S.000Z')
@@ -88,40 +81,57 @@ def get_token_sign(cert_file, key_file):
   <service>wsfe</service>
 </loginTicketRequest>"""
 
-    # 1. Definir la ruta completa del archivo TRA para asegurar que openssl lo encuentre
     tra_path = os.path.join(os.getcwd(), "tra.xml") 
     
-    # 2. Escribir el archivo TRA
     with open(tra_path, "w") as f:
         f.write(tra) 
 
-    # 3. Llamar a create_cms con la ruta del TRA
     cms = create_cms(tra_path, cert_file, key_file) 
     
-    # 4. Limpieza: Eliminar el archivo después de usarlo.
     os.remove(tra_path)
 
     client = Client(WSAA)
     
     try:
         # Llamada al servicio WSAA (Autenticación)
-        ta = client.service.loginCms(cms)
+        response = client.service.loginCms(cms)
         
-        # Si la llamada es exitosa
-        return ta.credentials.token, ta.credentials.sign
+        # CORRECCIÓN: Parsear la respuesta XML manualmente
+        # porque suds a veces no parsea bien los namespaces de AFIP
+        response_xml = str(response)
+        
+        # Intentar extraer usando el objeto directamente primero
+        try:
+            token = response.credentials.token
+            sign = response.credentials.sign
+        except AttributeError:
+            # Si falla, parsear el XML manualmente
+            root = ET.fromstring(response_xml)
+            
+            # Buscar en todos los namespaces posibles
+            token = None
+            sign = None
+            
+            for elem in root.iter():
+                if 'token' in elem.tag.lower():
+                    token = elem.text
+                if 'sign' in elem.tag.lower():
+                    sign = elem.text
+            
+            if not token or not sign:
+                raise Exception("No se pudo extraer token/sign de la respuesta WSAA")
+        
+        return token, sign
 
     except WebFault as e:
-        # Captura errores SOAP de la AFIP (e.g., "Computador no autorizado")
         error_msg = e.fault.faultstring
         raise Exception(f"Error WSAA (AFIP): {error_msg}. Revisar configuración de relación de certificado.")
     except Exception as e:
-        # Captura cualquier otro error (conexión, etc.)
         raise Exception(f"Error al obtener Token: {str(e)}. Intente re-deployar.")
 
 
 def get_wsfe_client(token, sign, cuit_emisor):
     client = Client(WSFE)
-    # Forma correcta de pasar las credenciales del WSAA a los métodos WSFE (Header SOAP)
     client.set_options(
         soapheaders={
             "Token": token,
@@ -196,7 +206,6 @@ def crear_factura(data):
     
     
     if not det.CAE:
-        # Si el CAE es nulo, buscamos la observación/error de la AFIP
         if hasattr(det, 'Observaciones') and det.Observaciones:
             raise Exception(f"AFIP rechazó la factura: {det.Observaciones[0].Msg}")
         else:
@@ -221,7 +230,6 @@ def facturar():
         factura = crear_factura(data)
         return jsonify({"status": "OK", "factura": factura})
     except Exception as e:
-        # Todos los errores específicos (OpenSSL, WSAA, WSFE) son devueltos aquí
         return jsonify({"status": "ERROR", "detalle": str(e)})
 
 
