@@ -457,3 +457,22 @@ def test():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+
+# Force deploy 2025-12-27
+```
+
+4. **Commit changes** con el mensaje: "Force deploy with TESTING mode"
+
+---
+
+### **2. Esperá 30 segundos**
+
+### **3. En Render, click en "Manual Deploy"** de nuevo
+
+### **4. Esperá que termine**
+
+### **5. Verificá:**
+```
+https://afip-microserver-1.onrender.com/test
+
+
