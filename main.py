@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from zeep import Client
 from zeep.transports import Transport
 from zeep.exceptions import Fault
@@ -10,8 +10,23 @@ import os
 import base64
 import subprocess
 import ssl
+from pdf_generator import crear_pdf_factura
 
 app = Flask(__name__)
+
+# Directorio para PDFs
+PDF_DIR = os.path.join(os.path.dirname(__file__), "pdfs")
+os.makedirs(PDF_DIR, exist_ok=True)
+
+# Logo path
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "logo.jpeg")
+
+# ======================================================================
+# MODO: TESTING o PRODUCCION
+# ======================================================================
+# Cambiar a "PRODUCCION" cuando quieras facturar en serio
+MODO = "TESTING"  # ← CAMBIAR AQUÍ ENTRE "TESTING" Y "PRODUCCION"
+# ======================================================================
 
 # Configuración SSL para permitir conexión a AFIP
 class DESAdapter(HTTPAdapter):
@@ -31,17 +46,41 @@ class DESAdapter(HTTPAdapter):
         return super(DESAdapter, self).proxy_manager_for(*args, **kwargs)
 
 # ----------------------------------------------------------------------
-# CONFIGURACIÓN CUITS Y CERTIFICADOS
+# CONFIGURACIÓN SEGÚN MODO
 # ----------------------------------------------------------------------
 
 CUIT_1 = "27239676931"
 CUIT_2 = "27461124149"
 
-CERT_1 = "facturacion27239676931.crt"
-KEY_1  = "cuit_27239676931.key"
-
-CERT_2 = "facturacion27461124149.crt"
-KEY_2  = "cuit_27461124149.key"
+if MODO == "TESTING":
+    print("=" * 60)
+    print("⚠️  MODO TESTING ACTIVADO - FACTURAS NO SON REALES")
+    print("=" * 60)
+    
+    # Certificados de homologación
+    CERT_1 = "homologacion_27239676931.crt"
+    KEY_1  = "homologacion_27239676931.key"
+    CERT_2 = "facturacion27461124149.crt"  # Si no tenés homologación del 2do CUIT
+    KEY_2  = "cuit_27461124149.key"
+    
+    # URLs de homologación
+    WSAA = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms?wsdl"
+    WSFE = "https://wswhomo.afip.gov.ar/wsfev1/service.asmx?WSDL"
+    
+else:  # PRODUCCION
+    print("=" * 60)
+    print("✅ MODO PRODUCCIÓN - FACTURAS REALES")
+    print("=" * 60)
+    
+    # Certificados de producción
+    CERT_1 = "facturacion27239676931.crt"
+    KEY_1  = "cuit_27239676931.key"
+    CERT_2 = "facturacion27461124149.crt"
+    KEY_2  = "cuit_27461124149.key"
+    
+    # URLs de producción
+    WSAA = "https://wsaa.afip.gov.ar/ws/services/LoginCms?wsdl"
+    WSFE = "https://servicios1.afip.gov.ar/wsfev1/service.asmx?WSDL"
 
 # Datos de los emisores
 EMISOR_DATA = {
@@ -58,13 +97,6 @@ EMISOR_DATA = {
         "inicio_actividades": "01/12/2023"
     }
 }
-
-# ----------------------------------------------------------------------
-# AFIP ENDPOINTS
-# ----------------------------------------------------------------------
-
-WSAA = "https://wsaa.afip.gov.ar/ws/services/LoginCms?wsdl"
-WSFE = "https://servicios1.afip.gov.ar/wsfev1/service.asmx?WSDL"
 
 # ----------------------------------------------------------------------
 # UTILIDADES
@@ -181,17 +213,19 @@ def get_token_sign(cert_file, key_file):
 # ----------------------------------------------------------------------
 
 def crear_factura(data):
-    # Limpiar CUITs de guiones y espacios
-    cuit_emisor   = str(data["cuit_emisor"]).replace("-", "").replace(" ", "").strip()
-    cuit_receptor = str(data["cuit_receptor"]).replace("-", "").replace(" ", "").strip()
-    punto_venta   = int(data["punto_venta"])
-    tipo_cbte     = int(data["tipo_cbte"])
-    importe       = float(data["importe"])
+    # Limpiar CUITs/DNI de guiones y espacios
+    cuit_emisor = str(data["cuit_emisor"]).replace("-", "").replace(" ", "").strip()
+    doc_receptor = str(data.get("doc_receptor") or data.get("cuit_receptor", "")).replace("-", "").replace(" ", "").strip()
+    tipo_doc_receptor = int(data.get("tipo_doc_receptor", 80))  # 80=CUIT, 96=DNI
+    punto_venta = int(data["punto_venta"])
+    tipo_cbte = int(data["tipo_cbte"])
+    importe = float(data["importe"])
     
     # Log para debugging
     print(f"\n=== INICIANDO FACTURACIÓN ===")
+    print(f"MODO: {MODO}")
     print(f"CUIT Emisor: {cuit_emisor}")
-    print(f"CUIT Receptor: {cuit_receptor}")
+    print(f"Doc Receptor: {doc_receptor} (Tipo: {tipo_doc_receptor})")
     print(f"Punto Venta: {punto_venta}")
     print(f"Tipo Comprobante: {tipo_cbte}")
     print(f"Importe: {importe}")
@@ -242,8 +276,8 @@ def crear_factura(data):
     
     FeDetReq = {
         'Concepto': 1,
-        'DocTipo': 80,
-        'DocNro': int(cuit_receptor),
+        'DocTipo': tipo_doc_receptor,  # 80=CUIT, 96=DNI
+        'DocNro': int(doc_receptor),
         'CbteDesde': cbte_nro,
         'CbteHasta': cbte_nro,
         'CbteFch': fecha,
@@ -265,7 +299,7 @@ def crear_factura(data):
     print(f"Comprobante preparado:")
     print(f"  - Fecha: {fecha}")
     print(f"  - Número: {cbte_nro}")
-    print(f"  - Doc Receptor: {int(cuit_receptor)}")
+    print(f"  - Doc Receptor: {int(doc_receptor)}")
     print(f"  - Importe Total: {round(importe, 2)}")
 
     # 5) Solicitar CAE
@@ -338,6 +372,52 @@ def facturar():
         print(f"NUEVA SOLICITUD DE FACTURACIÓN")
         print(f"{'='*60}")
         factura = crear_factura(data)
+        
+        # Generar PDF automáticamente
+        print("Generando PDF...")
+        print(f"DEBUG - Datos recibidos:")
+        print(f"  compania: {data.get('compania', '')}")
+        print(f"  domicilio: {data.get('domicilio', '')}")
+        print(f"  condicion_iva: {data.get('condicion_iva', '')}")
+        try:
+            cuit_emisor = data.get("cuit_emisor")
+            punto_venta = data.get("punto_venta", 2)
+            cbte_nro = factura["cbte_nro"]
+            
+            # Nombre del PDF
+            pdf_filename = f"{cuit_emisor}_011_{str(punto_venta).zfill(5)}_{str(cbte_nro).zfill(8)}.pdf"
+            pdf_path = os.path.join(PDF_DIR, pdf_filename)
+            
+            # Datos para el PDF
+            datos_pdf = {
+                "cuit_emisor": cuit_emisor,
+                "cuit_receptor": data.get("doc_receptor") or data.get("cuit_receptor", ""),
+                "punto_venta": punto_venta,
+                "tipo_cbte": data.get("tipo_cbte", 11),
+                "cbte_nro": cbte_nro,
+                "fecha_emision": datetime.datetime.now(),
+                "cae": factura["cae"],
+                "vencimiento_cae": factura["vencimiento"],
+                "importe": data.get("importe"),
+                "descripcion": data.get("descripcion", ""),
+                "compania": data.get("compania", ""),
+                "domicilio": data.get("domicilio", ""),
+                "condicion_iva": data.get("condicion_iva", "IVA Responsable Inscripto")
+            }
+            
+            # Generar PDF
+            crear_pdf_factura(datos_pdf, LOGO_PATH, pdf_path)
+            
+            # URL del PDF
+            pdf_url = f"https://afip-microserver-1.onrender.com/descargar_pdf/{pdf_filename}"
+            factura["pdf_url"] = pdf_url
+            
+            print(f"✓ PDF generado: {pdf_filename}")
+            
+        except Exception as e:
+            print(f"⚠ Error generando PDF (factura OK): {str(e)}")
+            # No fallar la factura si el PDF falla
+        
         return jsonify({"status": "OK", "factura": factura})
     except Exception as e:
         print(f"\n{'='*60}")
@@ -347,13 +427,22 @@ def facturar():
 
 @app.route("/", methods=["GET"])
 def home():
-    return "AFIP Microserver v4 - Funcionando correctamente"
+    return f"AFIP Microserver v5 - Modo: {MODO}"
+
+@app.route("/descargar_pdf/<filename>", methods=["GET"])
+def descargar_pdf(filename):
+    """Endpoint para descargar PDFs generados"""
+    try:
+        return send_from_directory(PDF_DIR, filename, as_attachment=True)
+    except Exception as e:
+        return jsonify({"status": "ERROR", "detalle": f"PDF no encontrado: {str(e)}"}), 404
 
 @app.route("/test", methods=["GET"])
 def test():
     """Endpoint de prueba para verificar configuración"""
     return jsonify({
         "status": "OK",
+        "modo": MODO,
         "message": "Servidor funcionando correctamente",
         "cuits_configurados": [CUIT_1, CUIT_2],
         "certificados": {
